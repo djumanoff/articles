@@ -1,0 +1,180 @@
+# Efficient number based rating system
+
+## Overview
+
+In this article I want to describe algorithm that I use when developing rating systems based on numbers/stars (like rate from 1 to 10, or give some number of stars). It's pretty obvious that this kind of use cases you can meet all over the services online or even offline (restaurant reviews, movie review, taxi ride feedback, etc.). It's usually a form that you come across after you receive your service or good. 
+
+![img.png](media/img.png)
+
+For the sake of simplicity, let's use taxi ride rating system, as an example, but keep in mind that this approach can be used for rating anything. I also omitted things like authentication/authorization, pagination, because this article is not about that, and these topics deserve their own separate discussion.
+
+I also omitted self-evident operations with HTTP requests processing and JSON serialization/deserialization, that are provided out-of-box in every web framework or standard library of some programming languages. 
+
+I will be using **Go** in this article.
+
+## Requirements
+
+Let's define minimal requirements, we need: 
+
+1. Endpoint that will handle rating of the ride itself 
+2. Endpoint that will return list of rides with their average rating
+3. Endpoint that will return list of ratings of the specific ride 
+
+## API Specification
+
+### Ride rating processing
+Handles rating of the ride, receive rating data and saves into database.
+
+Request: 
+```
+POST /rides/{ride_id}/ratings
+{
+    "user_id": "{user_id}",
+    "rating": {rating:1-5}
+}
+```
+
+Response: 
+```
+200 OK
+```
+
+### Return list of ride with their average rating
+Returns list of rides with their average rating (most likely might be used in administration panels for monitoring purposes or analytics)
+
+Request:
+```
+GET /rides
+```
+
+Response:
+```json
+[
+  {
+    "ride_id": "{ride_id}",
+    "user_id": "{user_id}",
+    "avg_rating": 4.4
+  }
+]
+```
+
+### Return list of ratings of the specific ride
+Request:
+```
+GET /rides/{ride_id}
+```
+
+Response:
+```json
+[
+  {
+    "user_id": "{user_id_1}",
+    "rating": 4
+  },
+  {
+    "user_id": "{user_id_2}",
+    "rating": 5
+  }
+]
+```
+
+## Naive implementation
+
+Let's first discuss how might implement this feature naively. 
+
+### Database structure
+
+So it's pretty obvious that you need two tables (btw, I will be using relation database with tables, however, this approach are can be used in any database that support very simple aggregation functions) and database scheme might look like this (give or take): 
+
+![img.png](media/db_scheme_naive.svg)
+
+I intentionally omitted data that is not related to rating feature (ride duration, route, etc.) and abstracted it away inside column `ride_info` :)
+
+### Straightforward approach
+
+1. Submitting rating on API level is pretty straightforward just create row in `ride_ratings` table on create rating request. 
+
+    ```sql
+    INSERT INTO ride_ratings (ride_id, user_id, rating) 
+    VALUES (:ride_id, :user_id, :rating)
+    ```
+   or if user wants to change the ratings of the ride, that he rated in the past, then update table: 
+   ```sql
+   UPDATE ride_ratings SET rating = :new_rating 
+   WHERE ride_id = :ride_id AND user_id = :user_id
+   ```
+
+2. When asked to return list of rides with average rating we run following SQL query: 
+
+    ```sql
+    SELECT r.id, AVG(rr.rating) AS avg_rating 
+    FROM rides r 
+    LEFT JOIN ride_ratings rr ON r.id = rr.ride_id
+    GROUP BY r.id;
+    ```
+
+    This is the most interesting part of the feature, let's make a quick analysis on runtime of this query, it's easy to state that it is at least `O(N*M)` where `N` is the number of rides and `M` is the number of ratings, and that is without considering operations required to actually calculate average rating.
+
+3. Returning list of ratings of specific ride is something that don't need any optimization (at least in context of current article):
+
+    ```sql
+    SELECT ride_id, user_id, rating FROM ride_ratings WHERE ride_id = :ride_id;
+    ```
+
+## Efficient implementation
+
+Implementation with few optimizations, but with little bit of data duplication. 
+
+### Database structure
+
+Structure of the database is remains the same except we add few new columns in `rides` table. 
+
+![img.png](media/db_scheme_efficient.svg)
+
+There are 2 new columns: `rating_sum`, `rating_count`. So the name of the columns pretty much say what these columns will be storing. 
+
+`rating_sum` will store sum of all the ratings of the given ride, and `rating_count` will store number of the ratings of the given ride. Given that introduction you might already take a guess that using these two column it's pretty easy to calculate average rating of the ride, and you will be absolutely right! 
+
+However, there are few questions that need to be addressed: 
+1. What happens if user changes his rating? 
+2. What to do if the rating needs to be deleted?
+3. Why don't we just calculate average rating on every rating request and just store it instead of storing sum and count?
+
+### Endpoints' logic
+
+1. Submitting rating request still creates/updates record in `ride_ratings` table, but now it also does: 
+   1. in case of new rating increments `rating_count` and adds rating value into `rating_sum` 
+      ```sql
+      UPDATE rides 
+      SET rating_sum = rating_sum + :rating, 
+        rating_count = rating_count + 1 
+      WHERE ride_id = :ride_id
+      ```
+   2. in case of changing existing rating we need to first subtract old rating from new rating and add result into `rating_sum` and don't anything with `rating_count` since number of ratings were not changed. 
+      ```sql
+      UPDATE rides 
+      SET rating_sum = rating_sum + :rating - (
+        SELECT rating 
+        FROM ride_ratings 
+        WHERE user_id = :user_id AND ride_id = :ride_id
+      )
+      WHERE ride_id = :ride_id
+      ```
+      if this seems counterintuitive, let's consider following example: sum of ratings of the ride was `40` and old rating was `4` and new rating is `5`, so operation above will calculate new sum: `40 + 5 - 4 = 41` which is correct new sum, so after some time user decided to change his rating again from `5` to `2`, let's see what happens: `41 + 2 - 5 = 38` which is correct new sum again. In case of rating deletion, we need to subtract rating value from `rating_sum` and decrement `rating_count` by 1 before deleting record from `ride_ratings`. 
+      ```sql
+      UPDATE rides 
+      SET rating_sum = rating_sum - (
+          SELECT rating 
+          FROM ride_ratings 
+          WHERE user_id = :user_id AND ride_id = :ride_id
+        ),
+        rating_count = rating_count - 1
+      WHERE ride_id = :ride_id
+      ```
+2. Using this approach returning list of rides with their average rating becomes pretty efficient: 
+   ```sql
+   SELECT r.id, r.rating_sum/r.rating_count AS avg_rating, r.ride_info 
+   FROM rides r
+   ```
+   This approach will give us complexity of `O(N)` where `N` is the number of rides. 
+3. Returning list of ratings of specific ride remains same as in naive implementation. 
