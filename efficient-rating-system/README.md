@@ -1,12 +1,12 @@
 # Efficient number based rating system
 
-## Overview
+In this article I want to describe algorithm that I use when developing rating systems based on numbers/stars (rate from 1 to 10, or give some number of stars). It's pretty obvious that this kind of use cases you can meet all over the services online or even offline (restaurant reviews, driver review, taxi driver feedback, etc.). It's usually a form that you come across after you receive your service or good. 
 
-In this article I want to describe algorithm that I use when developing rating systems based on numbers/stars (like rate from 1 to 10, or give some number of stars). It's pretty obvious that this kind of use cases you can meet all over the services online or even offline (restaurant reviews, movie review, taxi ride feedback, etc.). It's usually a form that you come across after you receive your service or good. 
+<p align="center">
+ <img src="media/img.png" alt="rating form" />
+</p>
 
-![img.png](media/img.png)
-
-For the sake of simplicity, let's use taxi ride rating system, as an example, but keep in mind that this approach can be used for rating anything. I also omitted things like authentication/authorization, pagination, because this article is not about that, and these topics deserve their own separate discussion.
+For the sake of simplicity, let's use driver rating system, as an example, but keep in mind that this approach can be used for rating anything. I also omitted things like authentication/authorization, pagination, because this article is not about that, and these topics deserve their own separate discussion.
 
 I also omitted self-evident operations with HTTP requests processing and JSON serialization/deserialization, that are provided out-of-box in every web framework or standard library of some programming languages. 
 
@@ -16,18 +16,18 @@ I will be using **Go** in this article.
 
 Let's define minimal requirements, we need: 
 
-1. Endpoint that will handle rating of the ride itself 
-2. Endpoint that will return list of rides with their average rating
-3. Endpoint that will return list of ratings of the specific ride 
+1. Endpoint that will handle rating of the driver itself 
+2. Endpoint that will return list of drivers with their average rating
+3. Endpoint that will return list of ratings of the specific driver 
 
 ## API Specification
 
-### Ride rating processing
-Handles rating of the ride, receive rating data and saves into database.
+### Driver rating processing
+Handles rating of the driver, receive rating data and saves into database.
 
 Request: 
 ```
-POST /rides/{ride_id}/ratings
+POST /drivers/{driver_id}/ratings
 {
     "user_id": "{user_id}",
     "rating": {rating:1-5}
@@ -39,29 +39,29 @@ Response:
 200 OK
 ```
 
-### Return list of ride with their average rating
-Returns list of rides with their average rating (most likely might be used in administration panels for monitoring purposes or analytics)
+### Return list of drivers with their average rating
+Returns list of drivers with their average rating (most likely might be used in administration panels for monitoring purposes or analytics)
 
 Request:
 ```
-GET /rides
+GET /drivers
 ```
 
 Response:
 ```json
 [
   {
-    "ride_id": "{ride_id}",
+    "driver_id": "{driver_id}",
     "user_id": "{user_id}",
     "avg_rating": 4.4
   }
 ]
 ```
 
-### Return list of ratings of the specific ride
+### Return list of ratings of the specific driver
 Request:
 ```
-GET /rides/{ride_id}
+GET /drivers/{driver_id}
 ```
 
 Response:
@@ -88,37 +88,37 @@ So it's pretty obvious that you need two tables (btw, I will be using relation d
 
 ![img.png](media/db_scheme_naive.svg)
 
-I intentionally omitted data that is not related to rating feature (ride duration, route, etc.) and abstracted it away inside column `ride_info` :)
+I intentionally omitted data that is not related to rating feature (driver duration, title, etc.) and abstracted it away inside `driver_info` column :)
 
 ### Straightforward approach
 
-1. Submitting rating on API level is pretty straightforward just create row in `ride_ratings` table on create rating request. 
+1. Submitting rating on API level is pretty straightforward just create row in `driver_ratings` table on create rating request. 
 
     ```sql
-    INSERT INTO ride_ratings (ride_id, user_id, rating) 
-    VALUES (:ride_id, :user_id, :rating)
+    INSERT INTO driver_ratings (driver_id, user_id, rating) 
+    VALUES (:driver_id, :user_id, :rating)
     ```
-   or if user wants to change the ratings of the ride, that he rated in the past, then update table: 
+   or if user wants to change the ratings of the driver, that he rated in the past, then update table: 
    ```sql
-   UPDATE ride_ratings SET rating = :new_rating 
-   WHERE ride_id = :ride_id AND user_id = :user_id
+   UPDATE driver_ratings SET rating = :new_rating 
+   WHERE driver_id = :driver_id AND user_id = :user_id
    ```
 
-2. When asked to return list of rides with average rating we run following SQL query: 
+2. When asked to return list of drivers with average rating we run following SQL query: 
 
     ```sql
     SELECT r.id, AVG(rr.rating) AS avg_rating 
-    FROM rides r 
-    LEFT JOIN ride_ratings rr ON r.id = rr.ride_id
+    FROM drivers r 
+    LEFT JOIN driver_ratings rr ON r.id = rr.driver_id
     GROUP BY r.id;
     ```
 
-    This is the most interesting part of the feature, let's make a quick analysis on runtime of this query, it's easy to state that it is at least `O(N*M)` where `N` is the number of rides and `M` is the number of ratings, and that is without considering operations required to actually calculate average rating.
+    This is the most interesting part of the feature, let's make a quick analysis on runtime of this query, it's easy to state that it is at least `O(N*M)` where `N` is the number of drivers and `M` is the number of ratings, and that is without considering operations required to actually calculate average rating.
 
-3. Returning list of ratings of specific ride is something that don't need any optimization (at least in context of current article):
+3. Returning list of ratings of specific driver is something that don't need any optimization (at least in context of current article):
 
     ```sql
-    SELECT ride_id, user_id, rating FROM ride_ratings WHERE ride_id = :ride_id;
+    SELECT driver_id, user_id, rating FROM driver_ratings WHERE driver_id = :driver_id;
     ```
 
 ## Efficient implementation
@@ -127,13 +127,13 @@ Implementation with few optimizations, but with little bit of data duplication.
 
 ### Database structure
 
-Structure of the database is remains the same except we add few new columns in `rides` table. 
+Structure of the database is remains the same except we add few new columns in `drivers` table. 
 
 ![img.png](media/db_scheme_efficient.svg)
 
 There are 2 new columns: `rating_sum`, `rating_count`. So the name of the columns pretty much say what these columns will be storing. 
 
-`rating_sum` will store sum of all the ratings of the given ride, and `rating_count` will store number of the ratings of the given ride. Given that introduction you might already take a guess that using these two column it's pretty easy to calculate average rating of the ride, and you will be absolutely right! 
+`rating_sum` will store sum of all the ratings of the given driver, and `rating_count` will store number of the ratings of the given driver. Given that introduction you might already take a guess that using these two column it's pretty easy to calculate average rating of the driver, and you will be absolutely right! 
 
 However, there are few questions that need to be addressed: 
 1. What happens if user changes his rating? 
@@ -142,39 +142,39 @@ However, there are few questions that need to be addressed:
 
 ### Endpoints' logic
 
-1. Submitting rating request still creates/updates record in `ride_ratings` table, but now it also does: 
+1. Submitting rating request still creates/updates record in `driver_ratings` table, but now it also does: 
    1. in case of new rating increments `rating_count` and adds rating value into `rating_sum` 
       ```sql
-      UPDATE rides 
+      UPDATE drivers 
       SET rating_sum = rating_sum + :rating, 
         rating_count = rating_count + 1 
-      WHERE ride_id = :ride_id
+      WHERE driver_id = :driver_id
       ```
    2. in case of changing existing rating we need to first subtract old rating from new rating and add result into `rating_sum` and don't anything with `rating_count` since number of ratings were not changed. 
       ```sql
-      UPDATE rides 
+      UPDATE drivers 
       SET rating_sum = rating_sum + :rating - (
         SELECT rating 
-        FROM ride_ratings 
-        WHERE user_id = :user_id AND ride_id = :ride_id
+        FROM driver_ratings 
+        WHERE user_id = :user_id AND driver_id = :driver_id
       )
-      WHERE ride_id = :ride_id
+      WHERE driver_id = :driver_id
       ```
-      if this seems counterintuitive, let's consider following example: sum of ratings of the ride was `40` and old rating was `4` and new rating is `5`, so operation above will calculate new sum: `40 + 5 - 4 = 41` which is correct new sum, so after some time user decided to change his rating again from `5` to `2`, let's see what happens: `41 + 2 - 5 = 38` which is correct new sum again. In case of rating deletion, we need to subtract rating value from `rating_sum` and decrement `rating_count` by 1 before deleting record from `ride_ratings`. 
+      if this seems counterintuitive, let's consider following example: sum of ratings of the driver was `40` and old rating was `4` and new rating is `5`, so operation above will calculate new sum: `40 + 5 - 4 = 41` which is correct new sum, so after some time user decided to change his rating again from `5` to `2`, let's see what happens: `41 + 2 - 5 = 38` which is correct new sum again. In case of rating deletion, we need to subtract rating value from `rating_sum` and decrement `rating_count` by 1 before deleting record from `driver_ratings`. 
       ```sql
-      UPDATE rides 
+      UPDATE drivers 
       SET rating_sum = rating_sum - (
           SELECT rating 
-          FROM ride_ratings 
-          WHERE user_id = :user_id AND ride_id = :ride_id
+          FROM driver_ratings 
+          WHERE user_id = :user_id AND driver_id = :driver_id
         ),
         rating_count = rating_count - 1
-      WHERE ride_id = :ride_id
+      WHERE driver_id = :driver_id
       ```
-2. Using this approach returning list of rides with their average rating becomes pretty efficient: 
+2. Using this approach returning list of drivers with their average rating becomes pretty efficient: 
    ```sql
-   SELECT r.id, r.rating_sum/r.rating_count AS avg_rating, r.ride_info 
-   FROM rides r
+   SELECT r.id, r.rating_sum/r.rating_count AS avg_rating, r.driver_info 
+   FROM drivers r
    ```
-   This approach will give us complexity of `O(N)` where `N` is the number of rides. 
-3. Returning list of ratings of specific ride remains same as in naive implementation. 
+   This approach will give us complexity of `O(N)` where `N` is the number of drivers. 
+3. Returning list of ratings of specific driver remains same as in naive implementation. 
