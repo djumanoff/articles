@@ -7,13 +7,16 @@ import (
 	_ "github.com/mattn/go-sqlite3" // Import go-sqlite3 library
 	"log"
 	"net/http"
+	"os"
 )
 
 const dbFilePath = "./data.sqlite"
 
 var schemaSQL = []string{`CREATE TABLE IF NOT EXISTS drivers (
   id integer PRIMARY KEY,
-  driver_info varchar(255)
+  driver_info varchar(255),
+  rating_sum bigint,
+  rating_count bigint
 )`, `
 CREATE TABLE IF NOT EXISTS driver_ratings (
   driver_id integer,
@@ -93,18 +96,18 @@ func createTables() {
 		}
 		statement.Exec()
 	}
-	//for i := 1; i <= 30; i++ {
-	//	query := `INSERT INTO drivers (id, driver_info) VALUES (?, ?)`
-	//	statement, err := db.Prepare(query) // Prepare statement.
-	//	// This is good to avoid SQL injections
-	//	if err != nil {
-	//		log.Fatal(err.Error())
-	//	}
-	//	_, err = statement.Exec(i, "{}")
-	//	if err != nil {
-	//		log.Fatal(err.Error())
-	//	}
-	//}
+	for i := 1; i <= 30; i++ {
+		query := `INSERT INTO drivers (id, driver_info, rating_sum, rating_count) VALUES (?, ?, 0, 0)`
+		statement, err := db.Prepare(query) // Prepare statement.
+		// This is good to avoid SQL injections
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+		_, err = statement.Exec(i, "{}")
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+	}
 }
 
 func createOrUpdateRating(driverId, userId string, rating int) error {
@@ -120,6 +123,19 @@ func createOrUpdateRating(driverId, userId string, rating int) error {
 		if err != nil {
 			return err
 		}
+		query = `UPDATE drivers 
+      SET rating_sum = rating_sum + ?, 
+        rating_count = rating_count + 1 
+      WHERE id = ?`
+		statement, err = db.Prepare(query) // Prepare statement.
+		// This is good to avoid SQL injections
+		if err != nil {
+			return err
+		}
+		_, err = statement.Exec(rating, driverId)
+		if err != nil {
+			return err
+		}
 	} else if ratingObject != nil {
 		query := `UPDATE driver_ratings SET rating = ? WHERE driver_id = ? AND user_id = ?`
 		statement, err := db.Prepare(query) // Prepare statement.
@@ -128,6 +144,18 @@ func createOrUpdateRating(driverId, userId string, rating int) error {
 			return err
 		}
 		_, err = statement.Exec(rating, driverId, userId)
+		if err != nil {
+			return err
+		}
+		query = `UPDATE drivers 
+      SET rating_sum = rating_sum + ? 
+      WHERE id = ?`
+		statement, err = db.Prepare(query) // Prepare statement.
+		// This is good to avoid SQL injections
+		if err != nil {
+			return err
+		}
+		_, err = statement.Exec(rating-ratingObject.Rating, driverId)
 		if err != nil {
 			return err
 		}
@@ -153,7 +181,7 @@ func getRating(driverId, userId string) (*Rating, error) {
 }
 
 func getDriversList() ([]Driver, error) {
-	row, err := db.Query("SELECT r.id, r.driver_info, COALESCE(AVG(rr.rating), 0) AS avg_rating FROM drivers r LEFT JOIN driver_ratings rr ON r.id = rr.driver_id GROUP BY r.id")
+	row, err := db.Query("SELECT r.id, r.driver_info, COALESCE(r.rating_sum/r.rating_count, 0) AS avg_rating FROM drivers r")
 	if err != nil {
 		return nil, err
 	}
@@ -192,12 +220,12 @@ func getDriverRatingsList(driverId string) ([]Rating, error) {
 main function
 */
 func main() {
-	//os.Remove(dbFilePath)
-	//file, err := os.Create(dbFilePath)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//file.Close()
+	os.Remove(dbFilePath)
+	file, err := os.Create(dbFilePath)
+	if err != nil {
+		panic(err)
+	}
+	file.Close()
 	db, _ = sql.Open("sqlite3", dbFilePath)
 	defer db.Close()
 	createTables()

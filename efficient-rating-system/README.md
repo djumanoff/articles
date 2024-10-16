@@ -103,6 +103,7 @@ I intentionally omitted data that is not related to rating feature (driver durat
    UPDATE driver_ratings SET rating = :new_rating 
    WHERE driver_id = :driver_id AND user_id = :user_id
    ```
+   Either way complexity of this operation is `O(1)`
 
 2. When asked to return list of drivers with average rating we run following SQL query: 
 
@@ -118,12 +119,15 @@ I intentionally omitted data that is not related to rating feature (driver durat
 3. Returning list of ratings of specific driver is something that don't need any optimization (at least in context of current article):
 
     ```sql
-    SELECT driver_id, user_id, rating FROM driver_ratings WHERE driver_id = :driver_id;
+   SELECT driver_id, user_id, rating 
+   FROM driver_ratings WHERE driver_id = :driver_id;
     ```
+
+You can find full implementation [here](https://github.com/djumanoff/articles/tree/main/efficient-rating-system/naive-impl). 
 
 ## Efficient implementation
 
-Implementation with few optimizations, but with little bit of data duplication. 
+Implementation with few optimizations. 
 
 ### Database structure
 
@@ -148,7 +152,7 @@ However, there are few questions that need to be addressed:
       UPDATE drivers 
       SET rating_sum = rating_sum + :rating, 
         rating_count = rating_count + 1 
-      WHERE driver_id = :driver_id
+      WHERE id = :driver_id
       ```
    2. in case of changing existing rating we need to first subtract old rating from new rating and add result into `rating_sum` and don't anything with `rating_count` since number of ratings were not changed. 
       ```sql
@@ -158,7 +162,7 @@ However, there are few questions that need to be addressed:
         FROM driver_ratings 
         WHERE user_id = :user_id AND driver_id = :driver_id
       )
-      WHERE driver_id = :driver_id
+      WHERE id = :driver_id
       ```
       if this seems counterintuitive, let's consider following example: sum of ratings of the driver was `40` and old rating was `4` and new rating is `5`, so operation above will calculate new sum: `40 + 5 - 4 = 41` which is correct new sum, so after some time user decided to change his rating again from `5` to `2`, let's see what happens: `41 + 2 - 5 = 38` which is correct new sum again. In case of rating deletion, we need to subtract rating value from `rating_sum` and decrement `rating_count` by 1 before deleting record from `driver_ratings`. 
       ```sql
@@ -169,8 +173,9 @@ However, there are few questions that need to be addressed:
           WHERE user_id = :user_id AND driver_id = :driver_id
         ),
         rating_count = rating_count - 1
-      WHERE driver_id = :driver_id
+      WHERE id = :driver_id
       ```
+      As you can see addition of these operations in submit rating logic won't affect complexity, and it still remains constant.     
 2. Using this approach returning list of drivers with their average rating becomes pretty efficient: 
    ```sql
    SELECT r.id, r.rating_sum/r.rating_count AS avg_rating, r.driver_info 
@@ -178,3 +183,13 @@ However, there are few questions that need to be addressed:
    ```
    This approach will give us complexity of `O(N)` where `N` is the number of drivers. 
 3. Returning list of ratings of specific driver remains same as in naive implementation. 
+
+Why don't we just calculate average rating on every rating request and just store it instead of storing sum and count?
+
+Because calculating average rating for specific driver will make rating operation complexity `O(M)` where `M` is the number of ratings of the driver. 
+
+You can find full implementation [here](https://github.com/djumanoff/articles/tree/main/efficient-rating-system/efficient-impl).
+
+This implementation can also be easily reimagined in distributed context, where you have separate `driver` service and `rating` service and `event bus`, you just listen for rating event in driver service and make that simple aggregations. 
+
+PS. I hope this article will be useful for some the developers out there, despite of its simplicity, I was struggling to find this approach in internet and in projects that contained similar functionality.
