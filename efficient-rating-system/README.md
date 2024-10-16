@@ -80,11 +80,11 @@ Response:
 
 ## Naive implementation
 
-Let's first discuss how might implement this feature naively. 
+Let's first discuss how one might implement this feature naively. 
 
 ### Database structure
 
-So it's pretty obvious that you need two tables (btw, I will be using relation database with tables, however, this approach are can be used in any database that support very simple aggregation functions) and database scheme might look like this (give or take): 
+So it's pretty obvious that you need two tables (btw, I will be using relation database with tables, however, this approach can be implemented in any database that supports very simple aggregation functions) and database scheme might look like this (give or take): 
 
 ![img.png](media/db_scheme_naive.svg)
 
@@ -98,7 +98,7 @@ I intentionally omitted data that is not related to rating feature (driver durat
     INSERT INTO driver_ratings (driver_id, user_id, rating) 
     VALUES (:driver_id, :user_id, :rating)
     ```
-   or if user wants to change the ratings of the driver, that he rated in the past, then update table: 
+   or if user wants to change the ratings of the driver, that he had rated in the past, then update table: 
    ```sql
    UPDATE driver_ratings SET rating = :new_rating 
    WHERE driver_id = :driver_id AND user_id = :user_id
@@ -131,13 +131,13 @@ Implementation with few optimizations.
 
 ### Database structure
 
-Structure of the database is remains the same except we add few new columns in `drivers` table. 
+Structure of the database remains the same except we add few new columns in `drivers` table. 
 
 ![img.png](media/db_scheme_efficient.svg)
 
-There are 2 new columns: `rating_sum`, `rating_count`. So the name of the columns pretty much say what these columns will be storing. 
+There are 2 new columns: `rating_sum`, `rating_count`. So the name of the columns pretty much says what these columns will be storing. 
 
-`rating_sum` will store sum of all the ratings of the given driver, and `rating_count` will store number of the ratings of the given driver. Given that introduction you might already take a guess that using these two column it's pretty easy to calculate average rating of the driver, and you will be absolutely right! 
+`rating_sum` will store sum of all the ratings of the given driver, and `rating_count` will store the number of the ratings of the given driver. Given that introduction you might already take a guess that using these two columns it's pretty easy to calculate average rating of the driver, and you will be absolutely right! 
 
 However, there are few questions that need to be addressed: 
 1. What happens if user changes his rating? 
@@ -175,7 +175,7 @@ However, there are few questions that need to be addressed:
         rating_count = rating_count - 1
       WHERE id = :driver_id
       ```
-      As you can see addition of these operations in submit rating logic won't affect complexity, and it still remains constant.     
+      As you can see addition of these operations in submit rating logic won't affect complexity, and it still remains constant `O(1)`.     
 2. Using this approach returning list of drivers with their average rating becomes pretty efficient: 
    ```sql
    SELECT r.id, r.rating_sum/r.rating_count AS avg_rating, r.driver_info 
